@@ -18,19 +18,6 @@ Instead of manufacturing empty commits, the tool appends one timestamped line to
 - Refuses diverged Git history, detached HEAD, active rebase/merge operations, and manual edits to the managed daily log.
 - Uses SSH Git authentication. No GitHub password, PAT, or private key is copied into the tool configuration.
 
-## Important: `.github/` is supposed to be committed
-
-`.github` begins with a dot, so Unix/Linux file managers may visually hide it. **Hidden is not the same as Git-ignored.** This repository intentionally tracks `.github/workflows/ci.yml`; otherwise GitHub Actions cannot run the audit workflow.
-
-The included `.gitignore` explicitly protects `.github/` from being ignored and only ignores the release-only repository-updater helpers plus normal editor/cache files.
-
-You can verify this after creating the repository:
-
-```bash
-git check-ignore -v .github/workflows/ci.yml || echo "PASS: workflow is not ignored"
-git status --short .github/workflows/ci.yml
-```
-
 ## Repository requirements
 
 For commits to qualify for GitHub profile contribution credit, use a **standalone repository** (not a fork), keep these commits on the repository's **default branch**, and configure a commit email associated with your GitHub account or your GitHub `noreply` email.
