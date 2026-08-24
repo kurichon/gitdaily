@@ -1,3 +1,11 @@
+# GitHub metadata/workflows are intentionally tracked.
+# The leading dot only makes .github hidden in Unix file listings; it must NOT
+# be ignored or GitHub Actions will not see .github/workflows/ci.yml.
+!/.github/
+!/.github/workflows/
+!/.github/workflows/*.yml
+!/.github/workflows/*.yaml
+
 # OS/editor noise
 .DS_Store
 Thumbs.db
@@ -5,7 +13,8 @@ Thumbs.db
 *~
 
 # Local-only repository package updater helpers.
-# These are included in release ZIPs but are intentionally not part of the GitHub runtime repository.
+# These are included in release ZIPs but are intentionally not part of the
+# GitHub runtime repository.
 /repo-updater/
 /preview_existing_repo_update.bat
 /update_existing_repo.bat

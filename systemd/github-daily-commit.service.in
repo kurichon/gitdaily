@@ -7,9 +7,9 @@ StartLimitBurst=4
 
 [Service]
 Type=oneshot
-Restart=on-failure
+Restart=no
+RestartForceExitStatus=75
 RestartSec=30min
-RestartPreventExitStatus=1
 User=@RUN_USER@
 Group=@RUN_GROUP@
 Environment="HOME=@HOME_DIR@"

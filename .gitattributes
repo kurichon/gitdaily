@@ -1,0 +1,15 @@
+# Keep Linux/runtime files usable when the package is prepared from Windows.
+* text=auto
+
+*.sh text eol=lf
+bin/* text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.in text eol=lf
+*.conf text eol=lf
+*.example text eol=lf
+*.md text eol=lf
+VERSION text eol=lf
+
+*.bat text eol=crlf

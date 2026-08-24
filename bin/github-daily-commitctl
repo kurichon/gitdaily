@@ -36,7 +36,7 @@ diagnose() {
     echo "GitHub Daily Commit diagnostics"
     echo
 
-    for cmd in git systemctl; do
+    for cmd in git systemctl getent ssh; do
         if command -v "$cmd" >/dev/null 2>&1; then
             echo "[PASS] $cmd is installed"
         else
@@ -87,18 +87,45 @@ diagnose() {
             echo "[FAIL] Active branch '$branch' != configured '$BRANCH'"
             failures=$((failures + 1))
         fi
-        [[ -n "$name" ]] && echo "[PASS] Git author name configured: $name" || { echo "[FAIL] Git author name is missing"; failures=$((failures + 1)); }
-        [[ -n "$email" ]] && echo "[PASS] Git author email configured: $email" || { echo "[FAIL] Git author email is missing"; failures=$((failures + 1)); }
+        if [[ -n "$name" ]]; then
+            echo "[PASS] Git author name configured: $name"
+        else
+            echo "[FAIL] Git author name is missing"
+            failures=$((failures + 1))
+        fi
+
+        if [[ -n "$email" ]]; then
+            echo "[PASS] Git author email configured: $email"
+        else
+            echo "[FAIL] Git author email is missing"
+            failures=$((failures + 1))
+        fi
         if [[ -n "$origin_url" ]]; then
             echo "[PASS] Remote '$REMOTE' configured: $origin_url"
-            if as_configured_user "$RUN_USER" "$home_dir" env \
-                GIT_TERMINAL_PROMPT=0 \
-                GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes" \
-                git -C "$REPO_DIR" ls-remote "$REMOTE" HEAD >/dev/null 2>&1; then
-                echo "[PASS] Remote is reachable non-interactively"
-            else
-                echo "[FAIL] Remote is not reachable non-interactively"
+            if [[ "$origin_url" == http://* || "$origin_url" == https://* ]]; then
+                echo "[FAIL] Remote uses HTTPS; this service requires a headless-safe SSH remote"
                 failures=$((failures + 1))
+            else
+                local remote_output remote_rc
+                set +e
+                remote_output="$(as_configured_user "$RUN_USER" "$home_dir" env \
+                    GIT_TERMINAL_PROMPT=0 \
+                    GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+                    git -C "$REPO_DIR" ls-remote "$REMOTE" HEAD 2>&1)"
+                remote_rc=$?
+                set -e
+                if (( remote_rc == 0 )); then
+                    echo "[PASS] Remote is reachable non-interactively"
+                else
+                    echo "[FAIL] Remote is not reachable non-interactively"
+                    if [[ -n "$remote_output" ]]; then
+                        printf '       %s\n' "$remote_output"
+                    fi
+                    if grep -Fq "Permission denied (publickey)" <<<"$remote_output"; then
+                        echo "       GitHub rejected the SSH key. Test as '$RUN_USER' with: ssh -T git@github.com"
+                    fi
+                    failures=$((failures + 1))
+                fi
             fi
         else
             echo "[FAIL] Remote '$REMOTE' missing"
@@ -157,6 +184,10 @@ case "${1:-}" in
         ;;
     *)
         usage
-        [[ -n "${1:-}" ]] && exit 2 || exit 0
+        if [[ -n "${1:-}" ]]; then
+            exit 2
+        else
+            exit 0
+        fi
         ;;
 esac

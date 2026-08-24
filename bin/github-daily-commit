@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 IFS=$'\n\t'
 
 PROGRAM="github-daily-commit"
@@ -21,6 +21,19 @@ tempfail() {
     exit 75
 }
 
+unexpected_error() {
+    local rc="$?"
+    local line="${BASH_LINENO[0]:-unknown}"
+    trap - ERR
+    log "ERROR: unexpected command failure (exit $rc) near line $line; refusing automatic retry as a transient network error." >&2
+    exit 1
+}
+
+# Normalize unexpected shell/command failures to the permanent failure code.
+# Explicit fetch/push failures use tempfail (75) and are the only failures that
+# systemd is expected to retry automatically.
+trap unexpected_error ERR
+
 require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
@@ -38,6 +51,14 @@ source "$CONFIG_FILE"
 : "${LOG_DIR:=activity}"
 : "${REMOTE:=origin}"
 : "${COMMIT_PREFIX:=chore: daily log}"
+
+# The managed log path must remain repository-relative and may not escape via
+# parent-directory components. install.sh writes the default "activity" value,
+# but validate the root-owned config again at runtime.
+if [[ "$LOG_DIR" == /* || "$LOG_DIR" == "." || "$LOG_DIR" == ".." \
+   || "$LOG_DIR" == ../* || "$LOG_DIR" == */../* || "$LOG_DIR" == */.. ]]; then
+    fail "LOG_DIR must be a repository-relative path without '..' components: $LOG_DIR"
+fi
 
 require_command git
 require_command date
@@ -153,6 +174,22 @@ IFS='|' read -r TODAY MONTH NOW <<< "$STAMP"
 LOG_FILE="$LOG_DIR/$MONTH.md"
 ENTRY_PREFIX="- $TODAY |"
 COMMIT_MESSAGE="$COMMIT_PREFIX $TODAY"
+
+# Refuse symlink traversal for every existing component of the managed log path.
+# This prevents a repository change from redirecting automated writes outside
+# the working tree.
+path_cursor="$REPO_DIR"
+IFS='/' read -r -a log_parts <<< "$LOG_DIR"
+for path_part in "${log_parts[@]}"; do
+    [[ -n "$path_part" ]] || fail "LOG_DIR contains an empty path component: $LOG_DIR"
+    path_cursor="$path_cursor/$path_part"
+    if [[ -L "$path_cursor" ]]; then
+        fail "Managed log path traverses a symlink: $path_cursor"
+    fi
+done
+if [[ -L "$LOG_FILE" ]]; then
+    fail "Managed log file must not be a symlink: $LOG_FILE"
+fi
 
 # Idempotency: after syncing, the monthly log itself is the source of truth.
 if [[ -f "$LOG_FILE" ]] && grep -Fq -- "$ENTRY_PREFIX" "$LOG_FILE"; then

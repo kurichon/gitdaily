@@ -157,5 +157,42 @@ set -e
 [[ "$output" == *"untracked"* || "$output" == *"uncommitted changes"* ]] || fail "dirty log error was not clear"
 pass "managed log manual edits fail safely"
 
+# 7. A symlinked managed log directory is refused and cannot redirect writes
+# outside the repository.
+work="$(make_fixture symlinklog)"
+config="$TMP/symlinklog.conf"
+write_config "$work" "$config"
+outside="$TMP/symlink-outside"
+mkdir -p "$outside"
+ln -s "$outside" "$work/activity"
+set +e
+output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"
+rc=$?
+set -e
+[[ $rc -ne 0 ]] || fail "symlinked managed log path was not refused"
+[[ "$output" == *"symlink"* ]] || fail "symlink refusal was not clear"
+[[ ! -e "$outside/$(date '+%Y-%m').md" ]] || fail "automation wrote through a managed-path symlink"
+pass "managed log path cannot escape through symlinks"
+
+# 8. Configured parent-directory traversal is refused before any write.
+work="$(make_fixture traversal)"
+config="$TMP/traversal.conf"
+cat > "$config" <<CONFIG
+REPO_DIR=$(printf '%q' "$work")
+RUN_USER=$(printf '%q' "$(id -un)")
+BRANCH=main
+REMOTE=origin
+LOG_DIR=../escape
+COMMIT_PREFIX=chore:\ daily\ log
+CONFIG
+set +e
+output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"
+rc=$?
+set -e
+[[ $rc -ne 0 ]] || fail "LOG_DIR parent traversal was not refused"
+[[ "$output" == *"LOG_DIR must be"* ]] || fail "LOG_DIR traversal refusal was not clear"
+[[ ! -e "$TMP/escape/$(date '+%Y-%m').md" ]] || fail "automation escaped the repository via LOG_DIR"
+pass "managed log path cannot use parent traversal"
+
 echo
 echo "All $pass_count functional tests passed."

@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="1.0.0"
+VERSION="1.0.2"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$SCRIPT_DIR"
 RUN_USER="${SUDO_USER:-}"
@@ -68,6 +68,8 @@ command -v getent >/dev/null 2>&1 || fail "getent is required"
 command -v runuser >/dev/null 2>&1 || fail "runuser is required (normally provided by util-linux)"
 command -v readlink >/dev/null 2>&1 || fail "readlink is required"
 command -v awk >/dev/null 2>&1 || fail "awk is required"
+command -v grep >/dev/null 2>&1 || fail "grep is required"
+command -v stat >/dev/null 2>&1 || fail "stat is required"
 command -v ssh >/dev/null 2>&1 || fail "OpenSSH client (ssh) is required"
 
 if [[ -z "$RUN_USER" || "$RUN_USER" == "root" ]]; then
@@ -113,13 +115,22 @@ pass "Git remote detected: $REMOTE -> $ORIGIN_URL"
 
 case "$ORIGIN_URL" in
     http://*|https://*)
-        fail "HTTPS remotes are intentionally not supported for unattended v1.0 operation. Use an SSH GitHub remote so no PAT/password is stored for the service."
+        fail "HTTPS remotes are intentionally not supported for unattended operation. Use an SSH GitHub remote so no PAT/password is stored for the service."
         ;;
 esac
 
 info "Checking non-interactive SSH access to the GitHub remote..."
-REMOTE_SYMREF="$(as_user git -C "$REPO_DIR" ls-remote --symref "$REMOTE" HEAD 2>/dev/null || true)"
-[[ -n "$REMOTE_SYMREF" ]] || fail "Cannot access '$REMOTE' non-interactively. Configure GitHub SSH or another headless-safe Git credential method, then retry."
+set +e
+REMOTE_SYMREF="$(as_user git -C "$REPO_DIR" ls-remote --symref "$REMOTE" HEAD 2>&1)"
+REMOTE_CHECK_RC=$?
+set -e
+if (( REMOTE_CHECK_RC != 0 )) || [[ -z "$REMOTE_SYMREF" ]]; then
+    printf '%s\n' "$REMOTE_SYMREF" >&2
+    if grep -Fq "Permission denied (publickey)" <<<"$REMOTE_SYMREF"; then
+        fail "GitHub SSH rejected the key for user '$RUN_USER'. Do not use sudo for git clone/key setup. As that user, run 'ssh -T git@github.com' (or your configured GitHub SSH alias), then see docs/GITHUB_SSH_SETUP.md."
+    fi
+    fail "Cannot access '$REMOTE' non-interactively. Verify the SSH remote/key/known_hosts setup, then retry."
+fi
 DEFAULT_BRANCH="$(printf '%s\n' "$REMOTE_SYMREF" | awk '/^ref:/ {sub("refs/heads/", "", $2); print $2; exit}')"
 [[ -n "$DEFAULT_BRANCH" ]] || fail "Could not determine the remote default branch."
 [[ "$CURRENT_BRANCH" == "$DEFAULT_BRANCH" ]] \
@@ -154,7 +165,8 @@ pass "Repository Git identity configured: $GIT_NAME <$GIT_EMAIL>"
 
 # Make sure the run user can write the repository before installing anything.
 if ! as_user test -w "$REPO_DIR" || ! as_user test -w "$REPO_DIR/.git"; then
-    fail "User '$RUN_USER' cannot write the repository and .git directory. Fix ownership/permissions first."
+    repo_owner="$(stat -c '%U:%G' "$REPO_DIR" 2>/dev/null || printf 'unknown')"
+    fail "User '$RUN_USER' cannot write the repository and .git directory (repository owner: $repo_owner). This often happens after 'sudo git clone'. Clone as the normal user or deliberately correct ownership before retrying."
 fi
 
 info "Fetching remote branch and checking repository relationship..."
@@ -203,9 +215,9 @@ StartLimitBurst=4
 
 [Service]
 Type=oneshot
-Restart=on-failure
+Restart=no
+RestartForceExitStatus=75
 RestartSec=30min
-RestartPreventExitStatus=1
 User=$RUN_USER
 Group=$RUN_GROUP
 Environment="HOME=$HOME_DIR"
