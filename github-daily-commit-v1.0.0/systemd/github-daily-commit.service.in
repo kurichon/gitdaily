@@ -1,0 +1,29 @@
+[Unit]
+Description=Create and push one GitHub daily activity log commit
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=3h
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+Restart=on-failure
+RestartSec=30min
+RestartPreventExitStatus=1
+User=@RUN_USER@
+Group=@RUN_GROUP@
+Environment="HOME=@HOME_DIR@"
+Environment=GIT_TERMINAL_PROMPT=0
+Environment="GIT_SSH_COMMAND=ssh -o BatchMode=yes -o StrictHostKeyChecking=yes"
+ExecStart=/usr/local/libexec/github-daily-commit
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths="@REPO_DIR@"
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true

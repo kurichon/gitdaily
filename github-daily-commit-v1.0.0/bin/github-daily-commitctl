@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SERVICE="github-daily-commit.service"
+TIMER="github-daily-commit.timer"
+CONFIG="/etc/github-daily-commit.conf"
+
+usage() {
+    cat <<USAGE
+Usage: github-daily-commitctl <command>
+
+Commands:
+  status      Show timer and service status
+  next        Show the next scheduled timer run
+  run         Trigger one run now (may ask for sudo/polkit authorization)
+  logs        Show recent service logs
+  diagnose    Run read-only configuration and repository checks
+USAGE
+}
+
+as_configured_user() {
+    local run_user="$1"
+    local home_dir="$2"
+    shift 2
+    if [[ "$(id -un)" == "$run_user" ]]; then
+        HOME="$home_dir" "$@"
+    elif [[ $EUID -eq 0 ]] && command -v runuser >/dev/null 2>&1; then
+        runuser -u "$run_user" -- env HOME="$home_dir" "$@"
+    else
+        sudo -u "$run_user" env HOME="$home_dir" "$@"
+    fi
+}
+
+diagnose() {
+    local failures=0
+    echo "GitHub Daily Commit diagnostics"
+    echo
+
+    for cmd in git systemctl; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            echo "[PASS] $cmd is installed"
+        else
+            echo "[FAIL] $cmd is missing"
+            failures=$((failures + 1))
+        fi
+    done
+
+    if [[ ! -r "$CONFIG" ]]; then
+        echo "[FAIL] Cannot read $CONFIG"
+        return 1
+    fi
+    echo "[PASS] Configuration is readable"
+
+    # shellcheck disable=SC1090
+    source "$CONFIG"
+    : "${REPO_DIR:=}"
+    : "${RUN_USER:=}"
+    : "${BRANCH:=}"
+    : "${REMOTE:=origin}"
+
+    local home_dir
+    home_dir="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6 || true)"
+    if [[ -z "$home_dir" ]]; then
+        echo "[FAIL] Configured user '$RUN_USER' does not exist"
+        failures=$((failures + 1))
+    else
+        echo "[PASS] Configured user exists: $RUN_USER"
+    fi
+
+    if [[ -d "$REPO_DIR/.git" ]]; then
+        echo "[PASS] Repository exists: $REPO_DIR"
+    else
+        echo "[FAIL] Git repository not found: $REPO_DIR"
+        failures=$((failures + 1))
+    fi
+
+    if [[ -n "$home_dir" && -d "$REPO_DIR/.git" ]]; then
+        local branch name email origin_url
+        branch="$(as_configured_user "$RUN_USER" "$home_dir" git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+        name="$(as_configured_user "$RUN_USER" "$home_dir" git -C "$REPO_DIR" config user.name 2>/dev/null || true)"
+        email="$(as_configured_user "$RUN_USER" "$home_dir" git -C "$REPO_DIR" config user.email 2>/dev/null || true)"
+        origin_url="$(as_configured_user "$RUN_USER" "$home_dir" git -C "$REPO_DIR" remote get-url "$REMOTE" 2>/dev/null || true)"
+
+        if [[ "$branch" == "$BRANCH" ]]; then
+            echo "[PASS] Active branch matches configured branch: $BRANCH"
+        else
+            echo "[FAIL] Active branch '$branch' != configured '$BRANCH'"
+            failures=$((failures + 1))
+        fi
+        [[ -n "$name" ]] && echo "[PASS] Git author name configured: $name" || { echo "[FAIL] Git author name is missing"; failures=$((failures + 1)); }
+        [[ -n "$email" ]] && echo "[PASS] Git author email configured: $email" || { echo "[FAIL] Git author email is missing"; failures=$((failures + 1)); }
+        if [[ -n "$origin_url" ]]; then
+            echo "[PASS] Remote '$REMOTE' configured: $origin_url"
+            if as_configured_user "$RUN_USER" "$home_dir" env \
+                GIT_TERMINAL_PROMPT=0 \
+                GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+                git -C "$REPO_DIR" ls-remote "$REMOTE" HEAD >/dev/null 2>&1; then
+                echo "[PASS] Remote is reachable non-interactively"
+            else
+                echo "[FAIL] Remote is not reachable non-interactively"
+                failures=$((failures + 1))
+            fi
+        else
+            echo "[FAIL] Remote '$REMOTE' missing"
+            failures=$((failures + 1))
+        fi
+    fi
+
+    if systemctl is-enabled "$TIMER" >/dev/null 2>&1; then
+        echo "[PASS] Timer is enabled"
+    else
+        echo "[FAIL] Timer is not enabled"
+        failures=$((failures + 1))
+    fi
+
+    if systemctl is-active "$TIMER" >/dev/null 2>&1; then
+        echo "[PASS] Timer is active"
+    else
+        echo "[FAIL] Timer is not active"
+        failures=$((failures + 1))
+    fi
+
+    echo
+    if (( failures == 0 )); then
+        echo "Diagnostics passed."
+    else
+        echo "Diagnostics found $failures issue(s)."
+        return 1
+    fi
+}
+
+case "${1:-}" in
+    status)
+        systemctl --no-pager --full status "$TIMER" "$SERVICE" || true
+        ;;
+    next)
+        systemctl list-timers --all "$TIMER"
+        ;;
+    run)
+        if [[ $EUID -eq 0 ]]; then
+            systemctl start "$SERVICE" || true
+        else
+            sudo systemctl start "$SERVICE" || true
+        fi
+        systemctl --no-pager --full status "$SERVICE" || true
+        ;;
+    logs)
+        if [[ $EUID -eq 0 ]]; then
+            journalctl -u "$SERVICE" -n 100 --no-pager
+        else
+            journalctl -u "$SERVICE" -n 100 --no-pager 2>/dev/null \
+                || sudo journalctl -u "$SERVICE" -n 100 --no-pager
+        fi
+        ;;
+    diagnose)
+        diagnose
+        ;;
+    *)
+        usage
+        [[ -n "${1:-}" ]] && exit 2 || exit 0
+        ;;
+esac

@@ -1,0 +1,12 @@
+[Unit]
+Description=Randomized daily GitHub commit timer
+
+[Timer]
+OnCalendar=*-*-* @START_TIME@
+RandomizedDelaySec=@RANDOM_WINDOW_HOURS@h
+AccuracySec=1min
+Persistent=true
+Unit=github-daily-commit.service
+
+[Install]
+WantedBy=timers.target

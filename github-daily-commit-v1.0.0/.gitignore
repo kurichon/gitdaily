@@ -1,0 +1,17 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Local-only repository package updater helpers.
+# These are included in release ZIPs but are intentionally not part of the GitHub runtime repository.
+/repo-updater/
+/preview_existing_repo_update.bat
+/update_existing_repo.bat
+/preview_existing_repo_update.sh
+/update_existing_repo.sh
+
+# Local test/cache output
+__pycache__/
+*.pyc

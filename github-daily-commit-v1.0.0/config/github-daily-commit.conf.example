@@ -1,0 +1,7 @@
+# Example only. install.sh writes /etc/github-daily-commit.conf automatically.
+REPO_DIR=/home/example/github-daily-commit
+RUN_USER=example
+BRANCH=main
+REMOTE=origin
+LOG_DIR=activity
+COMMIT_PREFIX=chore:\ daily\ log

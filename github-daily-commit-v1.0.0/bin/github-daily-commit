@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+PROGRAM="github-daily-commit"
+CONFIG_FILE="${GDC_CONFIG_FILE:-/etc/github-daily-commit.conf}"
+
+log() {
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S%z')" "$*"
+}
+
+fail() {
+    log "ERROR: $*" >&2
+    exit 1
+}
+
+tempfail() {
+    # EX_TEMPFAIL (75) is reserved for transient fetch/push failures. The
+    # systemd unit may retry this code, while permanent safety failures use 1.
+    log "TEMPORARY ERROR: $*" >&2
+    exit 75
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+}
+
+if [[ ! -r "$CONFIG_FILE" ]]; then
+    fail "Configuration file is missing or unreadable: $CONFIG_FILE"
+fi
+
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+
+: "${REPO_DIR:?REPO_DIR is required in $CONFIG_FILE}"
+: "${RUN_USER:?RUN_USER is required in $CONFIG_FILE}"
+: "${BRANCH:?BRANCH is required in $CONFIG_FILE}"
+: "${LOG_DIR:=activity}"
+: "${REMOTE:=origin}"
+: "${COMMIT_PREFIX:=chore: daily log}"
+
+require_command git
+require_command date
+require_command id
+
+if [[ "$(id -un)" != "$RUN_USER" ]]; then
+    fail "Must run as configured user '$RUN_USER' (currently '$(id -un)')."
+fi
+
+[[ -d "$REPO_DIR" ]] || fail "Repository directory does not exist: $REPO_DIR"
+cd "$REPO_DIR"
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "Not a Git working tree: $REPO_DIR"
+
+GIT_DIR="$(git rev-parse --git-dir)"
+if [[ "$GIT_DIR" != /* ]]; then
+    GIT_DIR="$REPO_DIR/$GIT_DIR"
+fi
+
+# Prevent overlapping timer/manual invocations. Prefer flock, with a mkdir fallback.
+LOCK_FILE="$GIT_DIR/github-daily-commit.lock"
+LOCK_DIR="$GIT_DIR/github-daily-commit.lock.d"
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        log "Another run is already active; exiting without changes."
+        exit 0
+    fi
+else
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        log "Another run is already active; exiting without changes."
+        exit 0
+    fi
+    trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+fi
+
+# Refuse to operate during Git history-changing operations.
+for marker in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+    if git rev-parse -q --verify "$marker" >/dev/null 2>&1; then
+        fail "Git operation in progress ($marker). Resolve it before the next run."
+    fi
+done
+[[ ! -d "$GIT_DIR/rebase-merge" && ! -d "$GIT_DIR/rebase-apply" ]] \
+    || fail "Git rebase/am operation is in progress. Resolve it before the next run."
+
+CURRENT_BRANCH="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+[[ -n "$CURRENT_BRANCH" ]] || fail "Repository is in detached HEAD state."
+[[ "$CURRENT_BRANCH" == "$BRANCH" ]] \
+    || fail "Current branch '$CURRENT_BRANCH' does not match configured branch '$BRANCH'."
+
+git remote get-url "$REMOTE" >/dev/null 2>&1 \
+    || fail "Git remote '$REMOTE' is not configured."
+
+# Git identity is deliberately required instead of guessed. This is what GitHub
+# uses to attribute command-line commits to an account.
+GIT_NAME="$(git config user.name || true)"
+GIT_EMAIL="$(git config user.email || true)"
+[[ -n "$GIT_NAME" ]] || fail "Git user.name is not configured for this repository."
+[[ -n "$GIT_EMAIL" ]] || fail "Git user.email is not configured for this repository."
+
+# Synchronize without rebasing or force-updating history.
+# GIT_TERMINAL_PROMPT=0 ensures a timer cannot hang waiting for credentials.
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o StrictHostKeyChecking=yes}"
+log "Fetching $REMOTE/$BRANCH..."
+if ! git fetch --prune "$REMOTE" "$BRANCH"; then
+    tempfail "Fetch failed. Network or remote authentication may be temporarily unavailable."
+fi
+
+git rev-parse --verify "$REMOTE/$BRANCH" >/dev/null 2>&1 \
+    || fail "Remote-tracking branch '$REMOTE/$BRANCH' is unavailable after fetch."
+
+LOCAL_HEAD="$(git rev-parse HEAD)"
+REMOTE_HEAD="$(git rev-parse "$REMOTE/$BRANCH")"
+
+if [[ "$LOCAL_HEAD" == "$REMOTE_HEAD" ]]; then
+    :
+elif git merge-base --is-ancestor "$LOCAL_HEAD" "$REMOTE_HEAD"; then
+    log "Local branch is behind; applying a fast-forward update."
+    git merge --ff-only "$REMOTE/$BRANCH"
+elif git merge-base --is-ancestor "$REMOTE_HEAD" "$LOCAL_HEAD"; then
+    # Only auto-push local-ahead history when every pending commit is provably
+    # from this automation. Never publish unrelated manual local commits.
+    mapfile -t PENDING_COMMITS < <(git rev-list --reverse "$REMOTE/$BRANCH..HEAD")
+    ((${#PENDING_COMMITS[@]} > 0)) || fail "Local-ahead state was detected but no pending commits were found."
+    for pending in "${PENDING_COMMITS[@]}"; do
+        subject="$(git show -s --format=%s "$pending")"
+        body="$(git show -s --format=%B "$pending")"
+        mapfile -t changed_files < <(git diff-tree --no-commit-id --name-only -r "$pending")
+        [[ "$subject" == "$COMMIT_PREFIX "* ]] \
+            || fail "Local branch contains a non-automation commit ($pending); refusing to auto-push it."
+        grep -Fqx -- "Automation: $PROGRAM" <<<"$body" \
+            || fail "Local branch contains an unrecognized pending commit ($pending); refusing to auto-push it."
+        ((${#changed_files[@]} == 1)) \
+            || fail "Pending automation commit $pending changed an unexpected number of files."
+        [[ "${changed_files[0]}" == "$LOG_DIR/"*.md ]] \
+            || fail "Pending automation commit $pending changed an unexpected path: ${changed_files[0]}"
+    done
+
+    log "Local branch is ahead only by validated automation commit(s); retrying push first."
+    if ! git push "$REMOTE" "$BRANCH"; then
+        tempfail "Pending automation commit(s) could not be pushed."
+    fi
+    if ! git fetch --prune "$REMOTE" "$BRANCH"; then
+        tempfail "Post-push fetch failed."
+    fi
+else
+    fail "Local and remote branches have diverged. Resolve manually; no history was rewritten."
+fi
+
+STAMP="$(date '+%Y-%m-%d|%Y-%m|%Y-%m-%dT%H:%M:%S%:z')"
+IFS='|' read -r TODAY MONTH NOW <<< "$STAMP"
+LOG_FILE="$LOG_DIR/$MONTH.md"
+ENTRY_PREFIX="- $TODAY |"
+COMMIT_MESSAGE="$COMMIT_PREFIX $TODAY"
+
+# Idempotency: after syncing, the monthly log itself is the source of truth.
+if [[ -f "$LOG_FILE" ]] && grep -Fq -- "$ENTRY_PREFIX" "$LOG_FILE"; then
+    log "Daily entry already exists for $TODAY; nothing to do."
+    exit 0
+fi
+
+# Do not absorb or overwrite manual edits to the file this automation owns.
+# git diff does not report untracked files, so handle that case explicitly.
+if [[ -e "$LOG_FILE" ]] && ! git ls-files --error-unmatch -- "$LOG_FILE" >/dev/null 2>&1; then
+    fail "The managed log file exists but is untracked: $LOG_FILE"
+fi
+if ! git diff --quiet -- "$LOG_FILE" || ! git diff --cached --quiet -- "$LOG_FILE"; then
+    fail "The managed log file has uncommitted changes: $LOG_FILE"
+fi
+
+mkdir -p "$LOG_DIR"
+if [[ ! -f "$LOG_FILE" ]]; then
+    cat > "$LOG_FILE" <<HEADER
+# Daily Commit Log — $MONTH
+
+Generated automatically by $PROGRAM. One line represents one successful daily run.
+
+HEADER
+fi
+printf '%s %s\n' "$ENTRY_PREFIX" "$NOW" >> "$LOG_FILE"
+
+# Commit only the managed log path. --only prevents unrelated staged changes in
+# the working tree from being included in this automated commit.
+git add -- "$LOG_FILE" || fail "Could not stage the managed log file."
+if git diff --cached --quiet -- "$LOG_FILE"; then
+    fail "Expected a staged log change, but no staged change was found."
+fi
+
+git commit --only \
+    --message "$COMMIT_MESSAGE" \
+    --message "Automation: $PROGRAM" \
+    -- "$LOG_FILE" \
+    || fail "Could not create the daily Git commit."
+
+if git push "$REMOTE" "$BRANCH"; then
+    log "SUCCESS: pushed '$COMMIT_MESSAGE' to $REMOTE/$BRANCH."
+else
+    tempfail "Commit was created locally but push failed. It will be retried safely."
+fi
