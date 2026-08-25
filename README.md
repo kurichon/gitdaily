@@ -6,7 +6,7 @@ Instead of manufacturing empty commits, the tool appends one timestamped line to
 
 ## What it does
 
-- Runs as a short-lived `systemd` **oneshot** service, not a permanent daemon.
+- Runs as a short-lived `systemd` service (`Type=simple`), not a permanent daemon.
 - Uses a `systemd` timer for one daily schedule plus a randomized delay.
 - Defaults to a run sometime between **08:00 and 20:00 local system time**.
 - Uses `Persistent=true`, so a missed calendar run can be triggered after the machine comes back online.
@@ -17,6 +17,19 @@ Instead of manufacturing empty commits, the tool appends one timestamped line to
 - Commits only the managed monthly log file; unrelated staged work is left untouched.
 - Refuses diverged Git history, detached HEAD, active rebase/merge operations, and manual edits to the managed daily log.
 - Uses SSH Git authentication. No GitHub password, PAT, or private key is copied into the tool configuration.
+
+## Important: `.github/` is supposed to be committed
+
+`.github` begins with a dot, so Unix/Linux file managers may visually hide it. **Hidden is not the same as Git-ignored.** This repository intentionally tracks `.github/workflows/ci.yml`; otherwise GitHub Actions cannot run the audit workflow.
+
+The included `.gitignore` explicitly protects `.github/` from being ignored and only ignores the release-only repository-updater helpers plus normal editor/cache files.
+
+You can verify this after creating the repository:
+
+```bash
+git check-ignore -v .github/workflows/ci.yml || echo "PASS: workflow is not ignored"
+git status --short .github/workflows/ci.yml
+```
 
 ## Repository requirements
 
@@ -172,7 +185,7 @@ Run:
 bash ./tests/audit.sh
 ```
 
-The audit checks Bash syntax, ShellCheck when available, systemd unit validity, line-ending safety, `.github`/`.gitignore` behavior, Python compilation, the repository updater, and functional Git simulations covering duplicate protection, staged-file isolation, push-retry recovery, divergence handling, local-ahead protection, and dirty managed-log protection.
+The audit checks Bash syntax, ShellCheck when available, systemd unit validity and cross-version service-type compatibility, line-ending safety, `.github`/`.gitignore` behavior, Python compilation, the repository updater, and functional Git simulations covering duplicate protection, staged-file isolation, push-retry recovery, divergence handling, local-ahead protection, and dirty managed-log protection.
 
 GitHub Actions runs the same audit with ShellCheck on pushes and pull requests. `.github/workflows/ci.yml` must therefore remain tracked.
 

@@ -190,3 +190,20 @@ Enable again later:
 ```bash
 sudo systemctl enable --now github-daily-commit.timer
 ```
+
+## CI error: `RestartForceExitStatus= ... isn't allowed for Type=oneshot`
+
+This was a v1.0.2 unit compatibility bug. Update to v1.0.3 or later. The service now uses `Type=simple`, which preserves the exit-status-75 transient retry behavior without the invalid/rejected oneshot combination. After updating, run:
+
+```bash
+bash ./tests/audit.sh
+```
+
+If the tool is already installed, rerun the installer so `/etc/systemd/system/github-daily-commit.service` is regenerated:
+
+```bash
+sudo bash ./install.sh
+systemctl cat github-daily-commit.service
+```
+
+The installed service should contain `Type=simple` and must not contain `Type=oneshot`.

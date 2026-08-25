@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="1.0.2"
+VERSION="1.0.3"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$SCRIPT_DIR"
 RUN_USER="${SUDO_USER:-}"
@@ -214,7 +214,7 @@ StartLimitIntervalSec=3h
 StartLimitBurst=4
 
 [Service]
-Type=oneshot
+Type=simple
 Restart=no
 RestartForceExitStatus=75
 RestartSec=30min

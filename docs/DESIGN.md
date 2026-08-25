@@ -51,9 +51,10 @@ SSH uses `BatchMode=yes` and `StrictHostKeyChecking=yes`, so a timer run cannot 
 
 The worker reserves exit status 75 (`EX_TEMPFAIL`) only for fetch/push failures that may succeed later.
 
-The systemd unit uses:
+The systemd unit uses a short-lived `Type=simple` worker so `RestartForceExitStatus=` remains valid across systemd versions:
 
 ```ini
+Type=simple
 Restart=no
 RestartForceExitStatus=75
 RestartSec=30min
@@ -61,7 +62,7 @@ StartLimitIntervalSec=3h
 StartLimitBurst=4
 ```
 
-`RestartForceExitStatus=75` forces a restart only for the explicitly transient status even though normal restarting is disabled. The start limit gives the initial attempt plus up to three retry starts within three hours. Validation, configuration, Git-safety, or unexpected failures are not automatically retried as network errors.
+`RestartForceExitStatus=75` forces a restart only for the explicitly transient status even though normal restarting is disabled. `Type=oneshot` is intentionally not used here because some systemd versions reject `RestartForceExitStatus=` on oneshot units. `Type=simple` still tracks the foreground worker until it exits, so the service remains short-lived. The start limit gives the initial attempt plus up to three retry starts within three hours. Validation, configuration, Git-safety, or unexpected failures are not automatically retried as network errors.
 
 ## Repository-package updater
 

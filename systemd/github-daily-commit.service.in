@@ -6,7 +6,7 @@ StartLimitIntervalSec=3h
 StartLimitBurst=4
 
 [Service]
-Type=oneshot
+Type=simple
 Restart=no
 RestartForceExitStatus=75
 RestartSec=30min

@@ -1,39 +1,31 @@
-# GitHub Daily Commit v1.0.2
+# GitHub Daily Commit v1.0.3
 
-Full packaging/authentication and repository-safety audit release.
+Compatibility and audit-hardening release.
 
-## Fixed / clarified
+## Fixed
 
-- Confirmed `.github/` must be tracked. Added explicit `.gitignore` negation rules and audit coverage so `.github/workflows/ci.yml` cannot silently disappear from the GitHub-ready tracked set.
-- Added `.gitattributes` to force LF line endings for Linux/runtime files when the repository is prepared from Windows.
-- Reworked installation documentation so source scripts are invoked with `bash ./...`; this avoids `Permission denied` when executable mode bits were lost during a Windows/web-upload workflow.
-- Added a dedicated GitHub SSH setup guide and prominent pre-clone authentication checks. The guide explicitly warns against `sudo git clone` and documents a repository-scoped write-enabled deploy-key setup for unattended systemd use.
-- Installer SSH failures now preserve/show the underlying Git/SSH error and provide a specific hint for `Permission denied (publickey)` instead of suppressing stderr.
-- Installer repository-permission failures now report the repository owner and identify `sudo git clone` as a common cause.
-- `github-daily-commitctl diagnose` now checks `git`, `systemctl`, `getent`, and `ssh`, distinguishes HTTPS remotes, preserves remote-access errors, and gives a targeted SSH-key hint.
+- Fixed the GitHub Actions/systemd validation failure:
+  `RestartForceExitStatus= set, which isn't allowed for Type=oneshot services`.
+- Changed the short-lived worker service from `Type=oneshot` to `Type=simple`.
+  The worker still exits immediately after one run; it is not a permanent daemon.
+- Preserved the existing bounded retry policy:
+  `Restart=no`, `RestartForceExitStatus=75`, `RestartSec=30min`,
+  `StartLimitIntervalSec=3h`, and `StartLimitBurst=4`.
+- Added an explicit audit regression guard that rejects a future
+  `Type=oneshot` + `RestartForceExitStatus=` combination even on systemd
+  versions that happen to accept it.
 
-## Runtime hardening
+## Audit hardening
 
-- Changed systemd retry semantics to `Restart=no` plus `RestartForceExitStatus=75`. Only explicit `EX_TEMPFAIL` fetch/push failures are automatically retried; unexpected/permanent exit codes cannot accidentally enter the network retry loop.
-- Added an unexpected-command error normalizer in the worker for clearer permanent-failure behavior.
-- Added validation preventing `LOG_DIR` from using absolute paths or `..` parent traversal.
-- Added symlink-path protection so a repository change cannot redirect managed activity writes outside the working tree.
+- The audit now requires `Type=simple` in both the service template and the
+  installer-generated unit definition.
+- `systemd-analyze verify` continues to validate the substituted service and
+  timer units.
+- Fixed the audit so Python compilation/tests no longer leave
+  `__pycache__/` or `*.pyc` files in the repository/release tree.
+- Added a repository-cleanliness assertion for Python cache artifacts.
 
-## Updater hardening
-
-- The safe repository updater is now explicitly tested to carry `.github/workflows/` into existing repositories.
-- Source and destination symlinks are refused rather than followed.
-- All changed target paths are validated before any update is applied, preventing partial writes before a conflicting non-file/symlink is discovered.
-- Backup directory naming now avoids same-second collisions.
-- Python cache files are excluded from release-updater source collection.
-
-## CI / audit improvements
-
-- GitHub Actions remains on current `actions/checkout@v7` and now sets `persist-credentials: false` because the audit never pushes.
-- Audit verifies `.github` tracking semantics, updater-helper ignore semantics, a simulated `git init && git add .` tracked set, `.gitattributes`, LF runtime line endings, systemd retry policy, GitHub workflow structure, Python compilation, updater behavior, and functional Git scenarios.
-- Functional worker tests increased from 6 to 8, adding symlink-escape and parent-traversal refusal scenarios.
-
-## Retained behavior
+## Re-audited retained behavior
 
 - one real timestamped activity-log commit per local date
 - randomized daily systemd timer
@@ -44,4 +36,17 @@ Full packaging/authentication and repository-safety audit release.
 - failed-push recovery without duplicate daily entries
 - unrelated staged-file isolation
 - refusal to auto-push unrelated local commits
-- systemd non-root execution and hardening
+- path traversal and symlink protections for managed logs
+- `.github/workflows/ci.yml` remains tracked
+- safe repository updater preserves `.git/` and `activity/`
+
+## Upgrade note
+
+If v1.0.2 is already installed, update the repository/package and rerun:
+
+```bash
+sudo bash ./install.sh
+```
+
+This regenerates `/etc/systemd/system/github-daily-commit.service` with
+`Type=simple` and reloads/enables the timer.

@@ -83,13 +83,21 @@ if command -v systemd-analyze >/dev/null 2>&1; then
       "$ROOT/systemd/github-daily-commit.timer.in" > "$unit_tmp/github-daily-commit.timer"
     systemd-analyze verify "$unit_tmp/github-daily-commit.service" "$unit_tmp/github-daily-commit.timer"
     systemd-analyze calendar '*-*-* 08:00:00' >/dev/null
+    grep -Fqx 'Type=simple' "$unit_tmp/github-daily-commit.service" \
+        || fail "service must use Type=simple for RestartForceExitStatus compatibility"
     grep -Fqx 'Restart=no' "$unit_tmp/github-daily-commit.service" \
         || fail "service must not retry arbitrary failures"
     grep -Fqx 'RestartForceExitStatus=75' "$unit_tmp/github-daily-commit.service" \
         || fail "service must force-retry only EX_TEMPFAIL (75)"
+    grep -Fqx 'Type=simple' "$ROOT/install.sh" \
+        || fail "installer-generated service type drifted from template"
     grep -Fqx 'RestartForceExitStatus=75' "$ROOT/install.sh" \
         || fail "installer-generated service retry policy drifted from template"
-    echo "[PASS] systemd unit/timer verification and retry policy"
+    if grep -Fqx 'Type=oneshot' "$unit_tmp/github-daily-commit.service" \
+       && grep -Fq 'RestartForceExitStatus=' "$unit_tmp/github-daily-commit.service"; then
+        fail "Type=oneshot must not be combined with RestartForceExitStatus (rejected by some systemd versions)"
+    fi
+    echo "[PASS] systemd unit/timer verification, cross-version service type, and retry policy"
 else
     echo "[SKIP] systemd-analyze is not installed"
 fi
@@ -146,11 +154,23 @@ echo "[PASS] GitHub Actions workflow structure"
 
 bash "$ROOT/tests/test.sh"
 
-python3 -m py_compile "$ROOT/tests/test_updater.py"
+# Compile temporary copies so running the audit never writes __pycache__ or
+# .pyc artifacts into the repository/release tree.
+pycompile_tmp="$TMP/pycompile"
+mkdir -p "$pycompile_tmp"
+cp "$ROOT/tests/test_updater.py" "$pycompile_tmp/test_updater.py"
+python3 -m py_compile "$pycompile_tmp/test_updater.py"
 if [[ -f "$ROOT/repo-updater/update_existing_repo.py" ]]; then
-    python3 -m py_compile "$ROOT/repo-updater/update_existing_repo.py"
+    cp "$ROOT/repo-updater/update_existing_repo.py" "$pycompile_tmp/update_existing_repo.py"
+    python3 -m py_compile "$pycompile_tmp/update_existing_repo.py"
 fi
-python3 "$ROOT/tests/test_updater.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/tests/test_updater.py"
+
+if find "$ROOT" -type d -name '__pycache__' -print -quit | grep -q . \
+   || find "$ROOT" -type f -name '*.pyc' -print -quit | grep -q .; then
+    fail "Python cache artifacts were written into the repository tree"
+fi
+echo "[PASS] Python compilation/tests leave the repository tree clean"
 
 if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git -C "$ROOT" diff --check
