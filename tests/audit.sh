@@ -70,12 +70,22 @@ fi
 if command -v systemd-analyze >/dev/null 2>&1; then
     unit_tmp="$TMP/systemd"
     mkdir -p "$unit_tmp"
+
+    # Verify the unit against the same executable state produced by install.sh.
+    # Source/repository file modes are not portable across every packaging and
+    # Windows Git workflow, while the production installer explicitly installs
+    # the worker as 0755. Pointing systemd-analyze directly at the source file
+    # therefore creates a false failure when Git stores it as 100644.
+    worker_tmp="$unit_tmp/github-daily-commit"
+    install -m 0755 "$ROOT/bin/github-daily-commit" "$worker_tmp"
+    [[ -x "$worker_tmp" ]] || fail "temporary installed worker is not executable"
+
     sed \
       -e 's/@RUN_USER@/root/g' \
       -e 's/@RUN_GROUP@/root/g' \
       -e 's#@HOME_DIR@#/root#g' \
       -e 's#@REPO_DIR@#/tmp#g' \
-      -e "s#ExecStart=/usr/local/libexec/github-daily-commit#ExecStart=$ROOT/bin/github-daily-commit#" \
+      -e "s#ExecStart=/usr/local/libexec/github-daily-commit#ExecStart=$worker_tmp#" \
       "$ROOT/systemd/github-daily-commit.service.in" > "$unit_tmp/github-daily-commit.service"
     sed \
       -e 's/@START_TIME@/08:00:00/g' \
@@ -93,11 +103,15 @@ if command -v systemd-analyze >/dev/null 2>&1; then
         || fail "installer-generated service type drifted from template"
     grep -Fqx 'RestartForceExitStatus=75' "$ROOT/install.sh" \
         || fail "installer-generated service retry policy drifted from template"
+    grep -Fq 'install -D -m 0755 "$SCRIPT_DIR/bin/github-daily-commit" /usr/local/libexec/github-daily-commit' "$ROOT/install.sh" \
+        || fail "installer must install the systemd worker with mode 0755"
+    grep -Fq 'install -D -m 0755 "$SCRIPT_DIR/bin/github-daily-commitctl" /usr/local/bin/github-daily-commitctl' "$ROOT/install.sh" \
+        || fail "installer must install the control command with mode 0755"
     if grep -Fqx 'Type=oneshot' "$unit_tmp/github-daily-commit.service" \
        && grep -Fq 'RestartForceExitStatus=' "$unit_tmp/github-daily-commit.service"; then
         fail "Type=oneshot must not be combined with RestartForceExitStatus (rejected by some systemd versions)"
     fi
-    echo "[PASS] systemd unit/timer verification, cross-version service type, and retry policy"
+    echo "[PASS] systemd unit/timer verification, installed executable mode, cross-version service type, and retry policy"
 else
     echo "[SKIP] systemd-analyze is not installed"
 fi

@@ -1,3 +1,12 @@
+# Release Notes
+
+## v1.0.4
+
+- Fixed GitHub Actions audit failure when repository shell files are stored as mode `100644`.
+- `systemd-analyze verify` now checks a temporary worker installed with mode `0755`, matching the production installer.
+- Added regression assertions that `install.sh` installs both runtime commands with mode `0755`.
+- No change to daily commit behavior, scheduling, Git identity, or push logic.
+
 # GitHub Daily Commit v1.0.3
 
 Compatibility and audit-hardening release.
