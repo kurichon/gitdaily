@@ -1,5 +1,13 @@
 # Release Notes
 
+## v1.0.5
+
+- Fixed GitHub Actions ShellCheck `SC2016` failures introduced by the v1.0.4 permission regression checks.
+- The two installer-mode assertions now use double-quoted patterns with an escaped literal `\$SCRIPT_DIR`, preserving the intended fixed-string match without triggering ShellCheck.
+- Re-ran the complete local audit: Bash syntax, LF checks, systemd verification, all 8 Git functional tests, updater tests, `.github` tracking, and repository-cleanliness checks pass.
+- Compared the v1.0.4 shell delta against v1.0.3 (whose GitHub ShellCheck stage passed): the two reported assertions were the only newly introduced ShellCheck-sensitive constructs.
+- No changes to daily commit behavior, scheduling, Git identity, branch selection, or push logic.
+
 ## v1.0.4
 
 - Fixed GitHub Actions audit failure when repository shell files are stored as mode `100644`.

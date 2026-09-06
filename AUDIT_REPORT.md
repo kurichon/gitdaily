@@ -1,32 +1,52 @@
-# Audit Report — v1.0.4
+# Audit Report — v1.0.5
 
 ## Trigger
 
-GitHub Actions run 17 failed during `systemd-analyze verify` with:
+GitHub Actions rejected the v1.0.4 audit with two ShellCheck `SC2016` findings in `tests/audit.sh`:
 
 ```text
-github-daily-commit.service: Command .../bin/github-daily-commit is not executable: Permission denied
+Expressions don't expand in single quotes, use double quotes for that.
 ```
+
+Both findings were in fixed-string assertions intended to search `install.sh` for the literal token `$SCRIPT_DIR`.
 
 ## Root cause
 
-The GitHub repository stores the source shell files as mode `100644`. The production installer already installs `bin/github-daily-commit` and `bin/github-daily-commitctl` with mode `0755`, but the audit pointed `systemd-analyze` directly at the source checkout. This made CI test a state that does not match the installed product.
+The v1.0.4 regression checks correctly wanted a literal `$SCRIPT_DIR`, but expressed the fixed-string grep patterns in single quotes. ShellCheck flags variable-looking text in single-quoted strings as `SC2016`, even when the literal dollar sign is intentional.
 
 ## Remediation
 
-The audit now copies the worker to its temporary systemd verification directory using `install -m 0755`, then verifies the generated service against that installed-state copy. It also asserts that the production installer still uses mode `0755` for both runtime commands.
+The two assertions now use double-quoted patterns with an escaped dollar sign:
 
-## Scope
+```bash
+grep -Fq "install -D -m 0755 \"\$SCRIPT_DIR/bin/github-daily-commit\" /usr/local/libexec/github-daily-commit" "$ROOT/install.sh"
 
-No runtime behavior was changed. Daily commit scheduling, duplicate protection, Git identity, branch handling, and push behavior remain unchanged.
+grep -Fq "install -D -m 0755 \"\$SCRIPT_DIR/bin/github-daily-commitctl\" /usr/local/bin/github-daily-commitctl" "$ROOT/install.sh"
+```
 
-## Validation performed
+This preserves the exact literal search while removing the ShellCheck ambiguity. No ShellCheck suppression directive was added.
 
-- Bash syntax validation
-- Shell functional test suite
-- `systemd-analyze verify` against temporary 0755 worker
-- Installer permission-policy assertions
-- GitHub workflow structure checks
-- `.github` tracking and `.gitignore` checks
-- Python updater tests
-- Repository cleanliness checks
+## Regression-surface review
+
+The v1.0.4 `tests/audit.sh` delta was compared with v1.0.3, whose GitHub Actions run had already passed ShellCheck before the later systemd check. The only new ShellCheck-sensitive lines were the two assertions reported by GitHub. The temporary `install -m 0755` worker setup itself is valid.
+
+## Local validation
+
+The complete local audit was rerun after the patch:
+
+- Bash syntax: pass for all shell entrypoints
+- Linux LF line endings: pass
+- `systemd-analyze verify`: pass against the temporary installed-mode worker
+- installer `0755` assertions: pass
+- `.github` tracking / `.gitignore`: pass
+- GitHub tracked-set / `.gitattributes`: pass
+- workflow structure: pass
+- Git functional tests: 8/8 pass
+- updater tests: pass
+- Python cache cleanliness: pass
+
+ShellCheck is not installed in this local build container, so the local audit reports that check as skipped. The exact GitHub-reported `SC2016` constructs were removed, and no runtime shell files other than `tests/audit.sh` were changed. GitHub Actions remains the final ShellCheck execution environment.
+
+## Runtime impact
+
+None. This release changes audit logic and release metadata only. The installed daily commit worker, systemd timer/service behavior, Git identity, and push logic are unchanged.

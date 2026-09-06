@@ -103,9 +103,9 @@ if command -v systemd-analyze >/dev/null 2>&1; then
         || fail "installer-generated service type drifted from template"
     grep -Fqx 'RestartForceExitStatus=75' "$ROOT/install.sh" \
         || fail "installer-generated service retry policy drifted from template"
-    grep -Fq 'install -D -m 0755 "$SCRIPT_DIR/bin/github-daily-commit" /usr/local/libexec/github-daily-commit' "$ROOT/install.sh" \
+    grep -Fq "install -D -m 0755 \"\$SCRIPT_DIR/bin/github-daily-commit\" /usr/local/libexec/github-daily-commit" "$ROOT/install.sh" \
         || fail "installer must install the systemd worker with mode 0755"
-    grep -Fq 'install -D -m 0755 "$SCRIPT_DIR/bin/github-daily-commitctl" /usr/local/bin/github-daily-commitctl' "$ROOT/install.sh" \
+    grep -Fq "install -D -m 0755 \"\$SCRIPT_DIR/bin/github-daily-commitctl\" /usr/local/bin/github-daily-commitctl" "$ROOT/install.sh" \
         || fail "installer must install the control command with mode 0755"
     if grep -Fqx 'Type=oneshot' "$unit_tmp/github-daily-commit.service" \
        && grep -Fq 'RestartForceExitStatus=' "$unit_tmp/github-daily-commit.service"; then
