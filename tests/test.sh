@@ -3,7 +3,11 @@ set -euo pipefail
 IFS=$'\n\t'
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-RUNNER="$ROOT/bin/github-daily-commit"
+RUNNER="${GDC_TEST_RUNNER:-$ROOT/bin/github-daily-commit}"
+
+run_runner() {
+    GDC_CONFIG_FILE="$1" bash "$RUNNER"
+}
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -52,9 +56,9 @@ work="$(make_fixture idempotent)"
 config="$TMP/idempotent.conf"
 write_config "$work" "$config"
 before="$(git -C "$work" rev-list --count HEAD)"
-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null
+run_runner "$config" >/dev/null
 after_one="$(git -C "$work" rev-list --count HEAD)"
-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null
+run_runner "$config" >/dev/null
 after_two="$(git -C "$work" rev-list --count HEAD)"
 [[ $((after_one - before)) -eq 1 ]] || fail "first run did not create exactly one commit"
 [[ "$after_two" == "$after_one" ]] || fail "second run created a duplicate daily commit"
@@ -69,7 +73,7 @@ config="$TMP/staged.conf"
 write_config "$work" "$config"
 printf 'user edit\n' >> "$work/manual.txt"
 git -C "$work" add manual.txt
-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null
+run_runner "$config" >/dev/null
 commit_files="$(git -C "$work" diff-tree --no-commit-id --name-only -r HEAD)"
 [[ "$commit_files" == "activity/$(date '+%Y-%m').md" ]] || fail "automated commit included unrelated files: $commit_files"
 git -C "$work" diff --cached --quiet -- manual.txt && fail "unrelated staged change was unexpectedly consumed"
@@ -86,7 +90,7 @@ exit 1
 HOOK
 chmod +x "$bare/hooks/pre-receive"
 set +e
-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null 2>&1
+run_runner "$config" >/dev/null 2>&1
 rc=$?
 set -e
 [[ $rc -ne 0 ]] || fail "push failure scenario unexpectedly succeeded"
@@ -94,7 +98,7 @@ local_count="$(git -C "$work" rev-list --count HEAD)"
 remote_count="$(git --git-dir="$bare" rev-list --count main)"
 [[ $local_count -eq $((remote_count + 1)) ]] || fail "failed push did not leave exactly one recoverable local commit"
 rm -f "$bare/hooks/pre-receive"
-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null
+run_runner "$config" >/dev/null
 local_count2="$(git -C "$work" rev-list --count HEAD)"
 remote_count2="$(git --git-dir="$bare" rev-list --count main)"
 [[ "$local_count2" == "$local_count" ]] || fail "retry created a duplicate commit"
@@ -117,7 +121,7 @@ printf 'local\n' >> "$work/manual.txt"
 git -C "$work" add manual.txt
 git -C "$work" commit -m "local change" >/dev/null
 set +e
-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"
+output="$(run_runner "$config" 2>&1)"
 rc=$?
 set -e
 [[ $rc -ne 0 ]] || fail "diverged repository was not refused"
@@ -134,7 +138,7 @@ git -C "$work" add manual.txt
 git -C "$work" commit -m "manual local commit" >/dev/null
 remote_before="$(git --git-dir="$TMP/manualahead.git" rev-parse main)"
 set +e
-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"
+output="$(run_runner "$config" 2>&1)"
 rc=$?
 set -e
 [[ $rc -ne 0 ]] || fail "manual local-ahead commit was unexpectedly accepted"
@@ -150,7 +154,7 @@ write_config "$work" "$config"
 mkdir -p "$work/activity"
 printf '# manual activity edit\n' > "$work/activity/$(date '+%Y-%m').md"
 set +e
-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"
+output="$(run_runner "$config" 2>&1)"
 rc=$?
 set -e
 [[ $rc -ne 0 ]] || fail "dirty managed log was not refused"
@@ -166,7 +170,7 @@ outside="$TMP/symlink-outside"
 mkdir -p "$outside"
 ln -s "$outside" "$work/activity"
 set +e
-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"
+output="$(run_runner "$config" 2>&1)"
 rc=$?
 set -e
 [[ $rc -ne 0 ]] || fail "symlinked managed log path was not refused"
@@ -186,7 +190,7 @@ LOG_DIR=../escape
 COMMIT_PREFIX=chore:\ daily\ log
 CONFIG
 set +e
-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"
+output="$(run_runner "$config" 2>&1)"
 rc=$?
 set -e
 [[ $rc -ne 0 ]] || fail "LOG_DIR parent traversal was not refused"

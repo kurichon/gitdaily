@@ -1,0 +1,293 @@
+[1mdiff --git a/AUDIT_REPORT.md b/AUDIT_REPORT.md[m
+[1mindex 86adb7d..eba6cf7 100644[m
+[1m--- a/AUDIT_REPORT.md[m
+[1m+++ b/AUDIT_REPORT.md[m
+[36m@@ -1,52 +1,94 @@[m
+[31m-# Audit Report — v1.0.5[m
+[32m+[m[32m# Audit Report — v1.0.6[m
+ [m
+ ## Trigger[m
+ [m
+[31m-GitHub Actions rejected the v1.0.4 audit with two ShellCheck `SC2016` findings in `tests/audit.sh`:[m
+[32m+[m[32mGitHub Actions v1.0.5 passed Bash syntax, ShellCheck, systemd verification, `.gitignore`/`.github` checks, and workflow-structure checks, then failed when `tests/test.sh` directly executed the repository copy of `bin/github-daily-commit`:[m
+ [m
+ ```text[m
+[31m-Expressions don't expand in single quotes, use double quotes for that.[m
+[32m+[m[32m/home/runner/work/gitdaily/gitdaily/tests/test.sh: line 55:[m
+[32m+[m[32m/home/runner/work/gitdaily/gitdaily/bin/github-daily-commit: Permission denied[m
+ ```[m
+ [m
+[31m-Both findings were in fixed-string assertions intended to search `install.sh` for the literal token `$SCRIPT_DIR`.[m
+[32m+[m[32mGitHub stores the current repository shell entrypoints as mode `100644`. The production installer intentionally installs the worker and control command as mode `0755`, so the installed service continues to work; only the source-level functional test harness was assuming an executable checkout.[m
+ [m
+ ## Root cause[m
+ [m
+[31m-The v1.0.4 regression checks correctly wanted a literal `$SCRIPT_DIR`, but expressed the fixed-string grep patterns in single quotes. ShellCheck flags variable-looking text in single-quoted strings as `SC2016`, even when the literal dollar sign is intentional.[m
+[32m+[m[32m`tests/test.sh` invoked the source worker directly at nine call sites:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mGDC_CONFIG_FILE="$config" "$RUNNER"[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mThat works when the release ZIP preserves Unix executable bits, but fails when a Windows/GitHub update path records the source blob as `100644`.[m
+[32m+[m
+[32m+[m[32mThis is the same portability boundary identified by the v1.0.4 systemd audit fix, but the functional-test layer still contained the old assumption.[m
+ [m
+ ## Remediation[m
+ [m
+[31m-The two assertions now use double-quoted patterns with an escaped dollar sign:[m
+[32m+[m[32mThe functional test suite now centralizes worker execution through Bash:[m
+ [m
+ ```bash[m
+[31m-grep -Fq "install -D -m 0755 \"\$SCRIPT_DIR/bin/github-daily-commit\" /usr/local/libexec/github-daily-commit" "$ROOT/install.sh"[m
+[32m+[m[32mrun_runner() {[m
+[32m+[m[32m    GDC_CONFIG_FILE="$1" bash "$RUNNER"[m
+[32m+[m[32m}[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mAll nine functional invocations use `run_runner`.[m
+ [m
+[31m-grep -Fq "install -D -m 0755 \"\$SCRIPT_DIR/bin/github-daily-commitctl\" /usr/local/bin/github-daily-commitctl" "$ROOT/install.sh"[m
+[32m+[m[32m`tests/test.sh` also supports a test-only runner override:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mRUNNER="${GDC_TEST_RUNNER:-$ROOT/bin/github-daily-commit}"[m
+ ```[m
+ [m
+[31m-This preserves the exact literal search while removing the ShellCheck ambiguity. No ShellCheck suppression directive was added.[m
+[32m+[m[32mThe main audit deliberately creates a temporary worker with mode `0644` and runs all eight functional tests against it. This makes source-mode independence an explicit regression requirement.[m
+[32m+[m
+[32m+[m[32mThe production permission contract remains separate and unchanged: `tests/audit.sh` verifies that `install.sh` installs both runtime commands with mode `0755`, and `systemd-analyze verify` receives a temporary worker installed as `0755`.[m
+[32m+[m
+[32m+[m[32m## GitHub-run evidence[m
+ [m
+[31m-## Regression-surface review[m
+[32m+[m[32mThe v1.0.5 GitHub Actions run confirmed the following stages passed before the permission failure:[m
+ [m
+[31m-The v1.0.4 `tests/audit.sh` delta was compared with v1.0.3, whose GitHub Actions run had already passed ShellCheck before the later systemd check. The only new ShellCheck-sensitive lines were the two assertions reported by GitHub. The temporary `install -m 0755` worker setup itself is valid.[m
+[32m+[m[32m- required metadata/docs[m
+[32m+[m[32m- Bash syntax for every shell entrypoint[m
+[32m+[m[32m- LF line endings[m
+[32m+[m[32m- ShellCheck[m
+[32m+[m[32m- systemd service/timer verification[m
+[32m+[m[32m- installed executable-mode assertions[m
+[32m+[m[32m- `.github` tracking / `.gitignore`[m
+[32m+[m[32m- simulated GitHub tracked set[m
+[32m+[m[32m- workflow structure[m
+[32m+[m
+[32m+[m[32mThe next failure occurred only when the first functional test directly executed the `100644` source worker.[m
+ [m
+ ## Local validation[m
+ [m
+[31m-The complete local audit was rerun after the patch:[m
+[32m+[m[32mThe complete v1.0.6 local audit was rerun after the patch:[m
+ [m
+ - Bash syntax: pass for all shell entrypoints[m
+ - Linux LF line endings: pass[m
+[31m-- `systemd-analyze verify`: pass against the temporary installed-mode worker[m
+[32m+[m[32m- `systemd-analyze verify`: pass[m
+ - installer `0755` assertions: pass[m
+ - `.github` tracking / `.gitignore`: pass[m
+ - GitHub tracked-set / `.gitattributes`: pass[m
+ - workflow structure: pass[m
+[31m-- Git functional tests: 8/8 pass[m
+[32m+[m[32m- Git functional tests: 8/8 pass against a deliberately non-executable (`0644`) worker[m
+ - updater tests: pass[m
+ - Python cache cleanliness: pass[m
+ [m
+[31m-ShellCheck is not installed in this local build container, so the local audit reports that check as skipped. The exact GitHub-reported `SC2016` constructs were removed, and no runtime shell files other than `tests/audit.sh` were changed. GitHub Actions remains the final ShellCheck execution environment.[m
+[32m+[m[32mShellCheck is not installed in the local build container. The immediately preceding v1.0.5 GitHub run passed ShellCheck, and v1.0.6 changes only `tests/test.sh`, `tests/audit.sh`, version/release metadata, and the checksum manifest. The new shell constructs use quoted variables and no ShellCheck suppression directives.[m
+ [m
+ ## Runtime impact[m
+ [m
+[31m-None. This release changes audit logic and release metadata only. The installed daily commit worker, systemd timer/service behavior, Git identity, and push logic are unchanged.[m
+[32m+[m[32mNone. v1.0.6 does not change:[m
+[32m+[m
+[32m+[m[32m- `bin/github-daily-commit`[m
+[32m+[m[32m- `bin/github-daily-commitctl`[m
+[32m+[m[32m- `install.sh`[m
+[32m+[m[32m- systemd service/timer templates[m
+[32m+[m[32m- commit creation logic[m
+[32m+[m[32m- scheduling[m
+[32m+[m[32m- Git identity[m
+[32m+[m[32m- synchronization/push behavior[m
+[32m+[m
+[32m+[m[32mThe installed daily-commit service does not need to be reinstalled for this CI-only test-harness fix.[m
+[1mdiff --git a/RELEASE_NOTES.md b/RELEASE_NOTES.md[m
+[1mindex b57c1a6..d6fb963 100644[m
+[1m--- a/RELEASE_NOTES.md[m
+[1m+++ b/RELEASE_NOTES.md[m
+[36m@@ -1,5 +1,15 @@[m
+ # Release Notes[m
+ [m
+[32m+[m[32m## v1.0.6[m
+[32m+[m
+[32m+[m[32m- Fixed GitHub Actions functional-test failure when the repository copy of `bin/github-daily-commit` is stored as mode `100644`.[m
+[32m+[m[32m- `tests/test.sh` now invokes the source worker through `bash` instead of requiring an executable source checkout.[m
+[32m+[m[32m- Centralized all nine worker test invocations behind one `run_runner` helper.[m
+[32m+[m[32m- Added a test-only runner override so the main audit can run all eight functional tests against a deliberately non-executable (`0644`) worker.[m
+[32m+[m[32m- Preserved the separate production contract that `install.sh` installs runtime commands as `0755`.[m
+[32m+[m[32m- Confirmed the v1.0.5 GitHub run passed ShellCheck and systemd verification before reaching this functional-test permission failure.[m
+[32m+[m[32m- No runtime worker, systemd, scheduling, Git identity, or push-logic changes.[m
+[32m+[m
+ ## v1.0.5[m
+ [m
+ - Fixed GitHub Actions ShellCheck `SC2016` failures introduced by the v1.0.4 permission regression checks.[m
+[1mdiff --git a/RELEASE_SHA256SUMS.txt b/RELEASE_SHA256SUMS.txt[m
+[1mindex a884f85..204ecdd 100644[m
+[1m--- a/RELEASE_SHA256SUMS.txt[m
+[1m+++ b/RELEASE_SHA256SUMS.txt[m
+[36m@@ -1,10 +1,10 @@[m
+ 177a1f67ba3d23a8e73a0e7bce2ef9c8025c2e99e517dba6f47b61714d001976  ./.gitattributes[m
+ 42aacd014c76fb9cd07c8839b01f4858a207246f4aa0bcbd4f9d2268b6a05446  ./.github/workflows/ci.yml[m
+ a808c8356dab13fdfb5f70d3ea67695746d195cf14b253769369ee2a60ecff4a  ./.gitignore[m
+[31m-7fc2df7965b6695940d26779a943a3f4f274ca7db9a4d21e8b74717e3a3d5f0b  ./AUDIT_REPORT.md[m
+[32m+[m[32m4eac5b04d160517f2053d40b58bdeec792df0db5d58bcffabed4fe0f8dcbb4a4  ./AUDIT_REPORT.md[m
+ 276345215217bc7a9bdadade455a11cf9eb90be0b7565710f7b3680973c69ada  ./README.md[m
+[31m-c345915394e60e1987c2fa569027a37bcdee35a9d228be0b9ba6f88b9dfb2063  ./RELEASE_NOTES.md[m
+[31m-8c54bfab7f1ae9bd1a7148eae41e7b0a8f4ad3726e0cac70f823a2d45db9e60c  ./VERSION[m
+[32m+[m[32m6e3a9caa7f452599cfb2f08922326035569867fef92b6d418d16b16ced441833  ./RELEASE_NOTES.md[m
+[32m+[m[32m51c18dc8694861beb47a67894e61044864214435389f6d3a274704d9566ff96c  ./VERSION[m
+ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./activity/.gitkeep[m
+ 880052e2a04d7d2f4f462ec7afeae99c574f5552de4029057470d413b213fb47  ./bin/github-daily-commit[m
+ 55ce3621f686c5855acb9a9cff72c42a07c7f898fc4df1362d40442b145040bf  ./bin/github-daily-commitctl[m
+[36m@@ -18,8 +18,8 @@[m [mbf8a952c8cd6d76970f6c7d7af7c2a4c905474bfdf61861d83f6df92c18ffa14  ./preview_exis[m
+ 4e4752a946800d50ef59071d095f22a0751108224508d7cec6c40a3308d52d99  ./repo-updater/update_existing_repo.py[m
+ b776e57c7902508fac1ee8cf62180389cbf56177cca364a71c01916bfa5ec3bb  ./systemd/github-daily-commit.service.in[m
+ 83d3730a87513c757e8994abadba41e68f886b6db3bc941f69dd77d3d0b4a775  ./systemd/github-daily-commit.timer.in[m
+[31m-bd8d72dfef9bb41fa00dc685a5d2546a3e23a811d894a2d7df4661c43a490037  ./tests/audit.sh[m
+[31m-71dd8b6bb9037875b6e0b744dbe159d9d60f602ff7241367dca1f925fbc4d898  ./tests/test.sh[m
+[32m+[m[32mf1a78716bbec4bfd83b76a569e13e3f353ef6bd0b8dfaeceee5bba08236f0480  ./tests/audit.sh[m
+[32m+[m[32m087123f9f81e98f0fe86c433846e500739b9e1246217592d69275f2cbe6d9f9d  ./tests/test.sh[m
+ 22d59a986d0c5182657ddd3533251fa733803c925e13c40e2926fe4980792e8f  ./tests/test_updater.py[m
+ 9d40eb3f6d3ee3cc6ae8973dc0f342bd9109b5918eaa2250a7ca8ead70172e1e  ./uninstall.sh[m
+ fca224ba39fe4982daf1eeea0ca43db9ca6ffc7497e32a5e996f8147782d104e  ./update_existing_repo.bat[m
+[1mdiff --git a/VERSION b/VERSION[m
+[1mindex 90a27f9..af0b7dd 100644[m
+[1m--- a/VERSION[m
+[1m+++ b/VERSION[m
+[36m@@ -1 +1 @@[m
+[31m-1.0.5[m
+[32m+[m[32m1.0.6[m
+[1mdiff --git a/tests/audit.sh b/tests/audit.sh[m
+[1mindex 578b66a..0f693f6 100644[m
+[1m--- a/tests/audit.sh[m
+[1m+++ b/tests/audit.sh[m
+[36m@@ -166,7 +166,15 @@[m [mgrep -Fq 'run: bash ./tests/audit.sh' "$ROOT/.github/workflows/ci.yml" \[m
+     || fail "CI workflow does not invoke tests/audit.sh"[m
+ echo "[PASS] GitHub Actions workflow structure"[m
+ [m
+[31m-bash "$ROOT/tests/test.sh"[m
+[32m+[m[32m# Functional tests must not depend on Git preserving executable bits on source[m
+[32m+[m[32m# files. GitHub/Windows packaging can legitimately check shell sources out as[m
+[32m+[m[32m# 0644; production execution is covered separately by the installer 0755 check.[m
+[32m+[m[32mnonexec_runner="$TMP/nonexec-source/github-daily-commit"[m
+[32m+[m[32mmkdir -p "$(dirname -- "$nonexec_runner")"[m
+[32m+[m[32minstall -m 0644 "$ROOT/bin/github-daily-commit" "$nonexec_runner"[m
+[32m+[m[32m[[ ! -x "$nonexec_runner" ]] || fail "non-executable source-worker fixture unexpectedly has execute permission"[m
+[32m+[m[32mGDC_TEST_RUNNER="$nonexec_runner" bash "$ROOT/tests/test.sh"[m
+[32m+[m[32mecho "[PASS] functional suite is independent of source executable bits"[m
+ [m
+ # Compile temporary copies so running the audit never writes __pycache__ or[m
+ # .pyc artifacts into the repository/release tree.[m
+[1mdiff --git a/tests/test.sh b/tests/test.sh[m
+[1mindex 6b9817e..14b5404 100644[m
+[1m--- a/tests/test.sh[m
+[1m+++ b/tests/test.sh[m
+[36m@@ -3,7 +3,11 @@[m [mset -euo pipefail[m
+ IFS=$'\n\t'[m
+ [m
+ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"[m
+[31m-RUNNER="$ROOT/bin/github-daily-commit"[m
+[32m+[m[32mRUNNER="${GDC_TEST_RUNNER:-$ROOT/bin/github-daily-commit}"[m
+[32m+[m
+[32m+[m[32mrun_runner() {[m
+[32m+[m[32m    GDC_CONFIG_FILE="$1" bash "$RUNNER"[m
+[32m+[m[32m}[m
+ TMP="$(mktemp -d)"[m
+ trap 'rm -rf "$TMP"' EXIT[m
+ [m
+[36m@@ -52,9 +56,9 @@[m [mwork="$(make_fixture idempotent)"[m
+ config="$TMP/idempotent.conf"[m
+ write_config "$work" "$config"[m
+ before="$(git -C "$work" rev-list --count HEAD)"[m
+[31m-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null[m
+[32m+[m[32mrun_runner "$config" >/dev/null[m
+ after_one="$(git -C "$work" rev-list --count HEAD)"[m
+[31m-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null[m
+[32m+[m[32mrun_runner "$config" >/dev/null[m
+ after_two="$(git -C "$work" rev-list --count HEAD)"[m
+ [[ $((after_one - before)) -eq 1 ]] || fail "first run did not create exactly one commit"[m
+ [[ "$after_two" == "$after_one" ]] || fail "second run created a duplicate daily commit"[m
+[36m@@ -69,7 +73,7 @@[m [mconfig="$TMP/staged.conf"[m
+ write_config "$work" "$config"[m
+ printf 'user edit\n' >> "$work/manual.txt"[m
+ git -C "$work" add manual.txt[m
+[31m-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null[m
+[32m+[m[32mrun_runner "$config" >/dev/null[m
+ commit_files="$(git -C "$work" diff-tree --no-commit-id --name-only -r HEAD)"[m
+ [[ "$commit_files" == "activity/$(date '+%Y-%m').md" ]] || fail "automated commit included unrelated files: $commit_files"[m
+ git -C "$work" diff --cached --quiet -- manual.txt && fail "unrelated staged change was unexpectedly consumed"[m
+[36m@@ -86,7 +90,7 @@[m [mexit 1[m
+ HOOK[m
+ chmod +x "$bare/hooks/pre-receive"[m
+ set +e[m
+[31m-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null 2>&1[m
+[32m+[m[32mrun_runner "$config" >/dev/null 2>&1[m
+ rc=$?[m
+ set -e[m
+ [[ $rc -ne 0 ]] || fail "push failure scenario unexpectedly succeeded"[m
+[36m@@ -94,7 +98,7 @@[m [mlocal_count="$(git -C "$work" rev-list --count HEAD)"[m
+ remote_count="$(git --git-dir="$bare" rev-list --count main)"[m
+ [[ $local_count -eq $((remote_count + 1)) ]] || fail "failed push did not leave exactly one recoverable local commit"[m
+ rm -f "$bare/hooks/pre-receive"[m
+[31m-GDC_CONFIG_FILE="$config" "$RUNNER" >/dev/null[m
+[32m+[m[32mrun_runner "$config" >/dev/null[m
+ local_count2="$(git -C "$work" rev-list --count HEAD)"[m
+ remote_count2="$(git --git-dir="$bare" rev-list --count main)"[m
+ [[ "$local_count2" == "$local_count" ]] || fail "retry created a duplicate commit"[m
+[36m@@ -117,7 +121,7 @@[m [mprintf 'local\n' >> "$work/manual.txt"[m
+ git -C "$work" add manual.txt[m
+ git -C "$work" commit -m "local change" >/dev/null[m
+ set +e[m
+[31m-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"[m
+[32m+[m[32moutput="$(run_runner "$config" 2>&1)"[m
+ rc=$?[m
+ set -e[m
+ [[ $rc -ne 0 ]] || fail "diverged repository was not refused"[m
+[36m@@ -134,7 +138,7 @@[m [mgit -C "$work" add manual.txt[m
+ git -C "$work" commit -m "manual local commit" >/dev/null[m
+ remote_before="$(git --git-dir="$TMP/manualahead.git" rev-parse main)"[m
+ set +e[m
+[31m-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"[m
+[32m+[m[32moutput="$(run_runner "$config" 2>&1)"[m
+ rc=$?[m
+ set -e[m
+ [[ $rc -ne 0 ]] || fail "manual local-ahead commit was unexpectedly accepted"[m
+[36m@@ -150,7 +154,7 @@[m [mwrite_config "$work" "$config"[m
+ mkdir -p "$work/activity"[m
+ printf '# manual activity edit\n' > "$work/activity/$(date '+%Y-%m').md"[m
+ set +e[m
+[31m-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"[m
+[32m+[m[32moutput="$(run_runner "$config" 2>&1)"[m
+ rc=$?[m
+ set -e[m
+ [[ $rc -ne 0 ]] || fail "dirty managed log was not refused"[m
+[36m@@ -166,7 +170,7 @@[m [moutside="$TMP/symlink-outside"[m
+ mkdir -p "$outside"[m
+ ln -s "$outside" "$work/activity"[m
+ set +e[m
+[31m-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"[m
+[32m+[m[32moutput="$(run_runner "$config" 2>&1)"[m
+ rc=$?[m
+ set -e[m
+ [[ $rc -ne 0 ]] || fail "symlinked managed log path was not refused"[m
+[36m@@ -186,7 +190,7 @@[m [mLOG_DIR=../escape[m
+ COMMIT_PREFIX=chore:\ daily\ log[m
+ CONFIG[m
+ set +e[m
+[31m-output="$(GDC_CONFIG_FILE="$config" "$RUNNER" 2>&1)"[m
+[32m+[m[32moutput="$(run_runner "$config" 2>&1)"[m
+ rc=$?[m
+ set -e[m
+ [[ $rc -ne 0 ]] || fail "LOG_DIR parent traversal was not refused"[m

@@ -166,7 +166,15 @@ grep -Fq 'run: bash ./tests/audit.sh' "$ROOT/.github/workflows/ci.yml" \
     || fail "CI workflow does not invoke tests/audit.sh"
 echo "[PASS] GitHub Actions workflow structure"
 
-bash "$ROOT/tests/test.sh"
+# Functional tests must not depend on Git preserving executable bits on source
+# files. GitHub/Windows packaging can legitimately check shell sources out as
+# 0644; production execution is covered separately by the installer 0755 check.
+nonexec_runner="$TMP/nonexec-source/github-daily-commit"
+mkdir -p "$(dirname -- "$nonexec_runner")"
+install -m 0644 "$ROOT/bin/github-daily-commit" "$nonexec_runner"
+[[ ! -x "$nonexec_runner" ]] || fail "non-executable source-worker fixture unexpectedly has execute permission"
+GDC_TEST_RUNNER="$nonexec_runner" bash "$ROOT/tests/test.sh"
+echo "[PASS] functional suite is independent of source executable bits"
 
 # Compile temporary copies so running the audit never writes __pycache__ or
 # .pyc artifacts into the repository/release tree.

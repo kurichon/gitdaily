@@ -1,5 +1,15 @@
 # Release Notes
 
+## v1.0.6
+
+- Fixed GitHub Actions functional-test failure when the repository copy of `bin/github-daily-commit` is stored as mode `100644`.
+- `tests/test.sh` now invokes the source worker through `bash` instead of requiring an executable source checkout.
+- Centralized all nine worker test invocations behind one `run_runner` helper.
+- Added a test-only runner override so the main audit can run all eight functional tests against a deliberately non-executable (`0644`) worker.
+- Preserved the separate production contract that `install.sh` installs runtime commands as `0755`.
+- Confirmed the v1.0.5 GitHub run passed ShellCheck and systemd verification before reaching this functional-test permission failure.
+- No runtime worker, systemd, scheduling, Git identity, or push-logic changes.
+
 ## v1.0.5
 
 - Fixed GitHub Actions ShellCheck `SC2016` failures introduced by the v1.0.4 permission regression checks.
